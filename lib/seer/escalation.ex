@@ -6,7 +6,7 @@ defmodule Seer.Escalation do
   that exhibit abusive behaviour. Multipliers are powers of a base
   (default 3): 3x -> 9x -> 27x -> 81x (capped).
 
-  State is ETS-only — no disk persistence (deliberate, for privacy).
+  State is ETS-only; no disk persistence, by design, for privacy.
   """
 
   use GenServer

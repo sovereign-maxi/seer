@@ -190,10 +190,11 @@ defmodule Seer.RateLimiter do
       :ets.update_element(@table, ets_key, {3, now})
     rescue
       ArgumentError ->
-        # Key doesn't exist yet — insert with count=1.
-        # Race: another process may have inserted between the failed
-        # update_counter and this insert. That's OK — insert overwrites
-        # with count=1, which at worst loses one count (conservative).
+        # Key doesn't exist yet; insert with count=1.
+        # Race: another process may insert between the failed
+        # update_counter and this insert. That's acceptable: the
+        # second insert overwrites with count=1, which at worst loses
+        # one count (the rate limiter errs conservative).
         :ets.insert(@table, {ets_key, 1, now})
     end
   end

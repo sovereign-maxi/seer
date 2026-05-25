@@ -5,8 +5,8 @@ defmodule Seer.Circuit.Extractor do
   Always derives the circuit ID from the peer `{ip, port}` tuple. Tor
   routes every external circuit to the local HTTP listener via loopback,
   so the raw `conn.remote_ip` is always `127.0.0.1` from the application's
-  point of view — but the ephemeral source port allocated by Tor differs
-  per circuit and is therefore a reasonable per-circuit surrogate.
+  point of view. The ephemeral source port allocated by Tor differs
+  per circuit, so it serves as a reasonable per-circuit surrogate.
 
   ## Why not trust `X-Tor-Circuit`?
 
@@ -18,13 +18,13 @@ defmodule Seer.Circuit.Extractor do
 
   If a deployment wants header-based extraction (e.g., a custom sidecar
   that reads Tor's control port and injects a signed circuit tag), set
-  `config :seer, :trust_circuit_header, true` — explicit opt-in only.
+  `config :seer, :trust_circuit_header, true`. Opt-in only.
   """
 
   @doc """
   Extracts a circuit ID hash from a Plug connection.
 
-  Returns `{:ok, hash}`. Always succeeds — falls back to peer address.
+  Returns `{:ok, hash}`. Always succeeds; falls back to peer address.
   """
   @spec extract(Plug.Conn.t()) :: {:ok, binary()}
   def extract(conn) do
@@ -42,9 +42,9 @@ defmodule Seer.Circuit.Extractor do
 
   # --- Private ---
 
-  # Header-based extraction is OFF by default. Enable only if you have a
-  # trusted local injector — raw external requests over Tor will arrive
-  # on loopback and could otherwise spoof the header freely.
+  # Header-based extraction is OFF by default. Enable only if you have
+  # a trusted local injector; raw external requests over Tor arrive on
+  # loopback and could otherwise spoof the header freely.
   defp maybe_extract_from_header(conn) do
     if Application.get_env(:seer, :trust_circuit_header, false) and localhost?(conn) do
       case Plug.Conn.get_req_header(conn, "x-tor-circuit") do

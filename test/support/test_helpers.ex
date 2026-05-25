@@ -4,7 +4,7 @@ defmodule Seer.TestHelpers do
   """
 
   @doc """
-  ExUnit setup callback — cleans all ETS tables between tests.
+  ExUnit setup callback that clears all Seer ETS tables between tests.
   Use with `setup :clean_state` after importing this module.
   """
   @spec clean_state(map()) :: :ok

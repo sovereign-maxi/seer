@@ -52,9 +52,9 @@ defmodule Seer.Challenge do
   Verifies a PoW solution against a nonce and difficulty.
 
   Atomically consumes the nonce to prevent replay. The nonce is
-  consumed BEFORE checking the solution — an invalid solution burns
-  the nonce. This is intentional: it prevents brute-force grinding
-  against a single challenge. Clients must request a new challenge
+  consumed *before* checking the solution; an invalid solution burns
+  the nonce. This is deliberate: it prevents brute-force grinding
+  against a single challenge. Clients must request a fresh challenge
   on failure.
   """
   @spec verify(binary(), binary(), non_neg_integer()) ::

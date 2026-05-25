@@ -2,7 +2,7 @@
 
 Anti-sybil and request gating for Tor hidden services.
 
-PoW challenges, per-circuit rate limiting, adaptive difficulty scaling, Tor circuit extraction, and escalating penalties. Products configure their operation types and limits — Seer handles enforcement.
+PoW challenges, per-circuit rate limiting, adaptive difficulty scaling, Tor circuit extraction, and escalating penalties. The product defines its operation types and limits; Seer enforces them.
 
 ## Installation
 
@@ -76,7 +76,7 @@ Difficulty.start_link(
 # Lock-free read from :persistent_term
 Difficulty.current()       # 12
 
-# Record requests — difficulty scales with throughput
+# Record requests; difficulty scales with throughput
 Difficulty.record_request()
 Difficulty.stats()         # %{difficulty: 16, ema_rate: 45.2, ...}
 ```
@@ -110,9 +110,13 @@ alias Seer.Circuit.Extractor
 # Extract hashed circuit ID from Plug.Conn
 {:ok, circuit_hash} = Extractor.extract(conn)
 
-# Strategies (in order):
-# 1. X-Tor-Circuit header (localhost only, prevents spoofing)
-# 2. Peer address fallback (ip:port)
+# Default behaviour: derive from peer {ip, port}. Tor terminates every
+# external circuit on loopback, but the ephemeral source port differs
+# per circuit and serves as the surrogate.
+#
+# To use a header-based circuit tag instead (e.g., from a trusted
+# sidecar that signs Tor control-port data), opt in:
+#     config :seer, :trust_circuit_header, true
 ```
 
 ### Escalation
@@ -120,7 +124,7 @@ alias Seer.Circuit.Extractor
 ```elixir
 alias Seer.Escalation
 
-# Record abuse — applies exponentially increasing penalties
+# Record abuse; applies exponentially increasing penalties
 Escalation.record(circuit_id)   # 3x rate limit
 Escalation.record(circuit_id)   # 9x
 Escalation.record(circuit_id)   # 27x
@@ -135,12 +139,12 @@ Escalation.reset(circuit_id)
 
 ## Architecture
 
-- **Hashcash PoW** — SHA256(nonce + solution) with leading zero bit check, constant-time verification
-- **Sliding window** — two-bucket rate limiting with fractional previous bucket interpolation
-- **EMA scaling** — difficulty adjusts based on exponential moving average of request throughput
-- **Anti-oscillation** — difficulty drops at most 2 bits per tick to prevent flapping
-- **Privacy-first** — escalation state is ETS-only, no disk persistence, no circuit IDs logged
-- **Tor-aware** — circuit extraction trusted only from localhost (SOCKS header spoofing prevention)
+* **Hashcash PoW**: SHA256(nonce + solution) with leading zero bit check, constant-time integer comparison
+* **Sliding window**: two-bucket rate limiting with fractional previous-bucket interpolation
+* **EMA scaling**: difficulty adjusts based on exponential moving average of request throughput
+* **Anti-oscillation**: difficulty drops at most 2 bits per tick to prevent flapping
+* **Privacy-first**: escalation state is ETS-only, no disk persistence, no circuit IDs in logs
+* **Tor-aware**: circuit ID derived from peer port (the `X-Tor-Circuit` header is rejected by default since every Tor request arrives on loopback and the header would be attacker-controlled)
 
 ## Development
 

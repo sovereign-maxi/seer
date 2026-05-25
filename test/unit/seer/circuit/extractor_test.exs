@@ -59,7 +59,7 @@ defmodule Seer.Circuit.ExtractorTest do
         )
 
       assert {:ok, hash} = Extractor.extract(conn)
-      # Should fall back to peer data — the header is NOT trusted by default.
+      # Should fall back to peer data: the header is not trusted by default.
       refute hash == :crypto.hash(:sha256, "spoofed")
       assert hash == :crypto.hash(:sha256, "127.0.0.1:54321")
     end
@@ -148,7 +148,7 @@ defmodule Seer.Circuit.ExtractorTest do
     end
 
     # Peer data always contains address/port per Plug spec,
-    # so no error case exists — dialyzer confirms this.
+    # so no error case exists; dialyzer confirms this.
   end
 
   # --- test_circuit_id/0 ---
