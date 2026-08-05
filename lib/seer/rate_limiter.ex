@@ -13,8 +13,19 @@ defmodule Seer.RateLimiter do
           write: {10, 300},    # 10 requests per 300 seconds
           expensive: {5, 300}  # 5 requests per 300 seconds
         },
-        global_multiplier: 10  # global limits are 10x per-circuit
+        global_multiplier: 100 # global limits are 100x per-circuit
       )
+
+  ## Global-bucket sizing
+
+  The global bucket exists to bound the total signing/write cost
+  the venue absorbs even under a spray of small attackers. Its
+  size is `max_requests * global_multiplier` — a single attacker
+  hitting the per-circuit cap contributes only `1/multiplier` to
+  the global. Too low a multiplier lets a single attacker willing
+  to burn their quota 429 the whole venue's login/read surface.
+  Default multiplier is 100 so a single attacker has to genuinely
+  flood before other users are affected.
   """
 
   use GenServer
@@ -107,7 +118,7 @@ defmodule Seer.RateLimiter do
   @impl GenServer
   def init(opts) do
     limits_config = Keyword.get(opts, :limits, @default_limits)
-    global_mult = Keyword.get(opts, :global_multiplier, 10)
+    global_mult = Keyword.get(opts, :global_multiplier, 100)
 
     :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])
     :persistent_term.put(Seer.RateLimiter.Config, limits_config)
