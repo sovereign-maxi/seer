@@ -4,7 +4,7 @@ defmodule Seer do
 
   Seer provides PoW challenges, per-circuit rate limiting, adaptive
   difficulty scaling, Tor circuit extraction, and escalating penalties.
-  The product defines its operation types and limits; Seer enforces
+  The consumer defines its operation types and limits; Seer enforces
   them.
 
   ## Components

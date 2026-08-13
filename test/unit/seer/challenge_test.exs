@@ -40,10 +40,10 @@ defmodule Seer.ChallengeTest do
       assert c1.nonce != c2.nonce
     end
 
-    test "registers nonce in NonceStore" do
+    test "registers nonce in NonceStore with its issued difficulty" do
       {:ok, challenge} = Challenge.generate(4)
       # Nonce should be consumable (proves it was tracked)
-      assert :ok = NonceStore.consume_nonce(challenge.nonce)
+      assert {:ok, 4} = NonceStore.consume_nonce(challenge.nonce)
     end
 
     test "expires_at is 120 seconds after created_at" do
@@ -59,15 +59,15 @@ defmodule Seer.ChallengeTest do
     end
   end
 
-  # --- verify/3 ---
+  # --- verify/2 ---
 
-  describe "verify/3" do
+  describe "verify/2" do
     test "accepts a valid solution" do
       difficulty = 1
       {:ok, challenge} = Challenge.generate(difficulty)
       solution = solve_pow(challenge.nonce, difficulty)
 
-      assert :ok = Challenge.verify(challenge.nonce, solution, difficulty)
+      assert :ok = Challenge.verify(challenge.nonce, solution)
     end
 
     test "rejects an invalid solution" do
@@ -75,11 +75,20 @@ defmodule Seer.ChallengeTest do
       {:ok, challenge} = Challenge.generate(difficulty)
       bad_solution = <<0, 0, 0, 0, 0, 0, 0, 1>>
 
-      result = Challenge.verify(challenge.nonce, bad_solution, difficulty)
+      result = Challenge.verify(challenge.nonce, bad_solution)
 
       # Either invalid_solution (hash didn't meet difficulty) or it could pass by luck
       # With difficulty 8 and a fixed solution, overwhelmingly likely to fail
       assert result == :ok or result == {:error, :invalid_solution}
+    end
+
+    test "verification uses the issued difficulty — it cannot be weakened by the caller" do
+      {:ok, challenge} = Challenge.generate(12)
+      weak = solve_weak(challenge.nonce)
+
+      # The weak solution passes a 1-bit check, but the challenge was
+      # issued at 12 — verification must reject.
+      assert {:error, :invalid_solution} = Challenge.verify(challenge.nonce, weak)
     end
 
     test "prevents replay (nonce already used)" do
@@ -87,33 +96,32 @@ defmodule Seer.ChallengeTest do
       {:ok, challenge} = Challenge.generate(difficulty)
       solution = solve_pow(challenge.nonce, difficulty)
 
-      assert :ok = Challenge.verify(challenge.nonce, solution, difficulty)
+      assert :ok = Challenge.verify(challenge.nonce, solution)
 
-      assert {:error, :nonce_already_used} =
-               Challenge.verify(challenge.nonce, solution, difficulty)
+      assert {:error, :nonce_already_used} = Challenge.verify(challenge.nonce, solution)
     end
 
     test "rejects expired nonce" do
       nonce = :crypto.strong_rand_bytes(16)
       # Set expiry in the past
       past = System.monotonic_time(:second) - 10
-      NonceStore.track_nonce(nonce, {:issued, past})
+      NonceStore.track_nonce(nonce, {:issued, past, 1})
 
       solution = solve_pow(nonce, 1)
-      assert {:error, :nonce_expired} = Challenge.verify(nonce, solution, 1)
+      assert {:error, :nonce_expired} = Challenge.verify(nonce, solution)
     end
 
     test "rejects unknown nonce" do
       unknown_nonce = :crypto.strong_rand_bytes(16)
       solution = <<1, 2, 3, 4>>
 
-      assert {:error, :nonce_not_found} = Challenge.verify(unknown_nonce, solution, 1)
+      assert {:error, :nonce_not_found} = Challenge.verify(unknown_nonce, solution)
     end
 
     test "verify with difficulty 1 is fast" do
       {:ok, challenge} = Challenge.generate(1)
       solution = solve_pow(challenge.nonce, 1)
-      assert :ok = Challenge.verify(challenge.nonce, solution, 1)
+      assert :ok = Challenge.verify(challenge.nonce, solution)
     end
   end
 
@@ -192,9 +200,6 @@ defmodule Seer.ChallengeTest do
     end
 
     test "hash with exactly 16 leading zero bits" do
-      # 0x0080 = 0000 0000 1000 0000 -> 8 leading zeros for first byte, then 1 in MSB of second
-      # Actually: <<0, 128, ...>> -> first 8 bits are 0, 9th bit is 1 -> 8 leading zeros
-      # For 16 leading zeros: need first two bytes to be 0, third byte MSB to be 1
       # <<0, 0, 128, 0::224>> -> 16 leading zeros then 1
       hash = <<0, 0, 128, 0::224>>
       assert Challenge.has_leading_zero_bits?(hash, 16)
@@ -299,6 +304,21 @@ defmodule Seer.ChallengeTest do
       solution
     else
       solve_pow(nonce, difficulty, counter + 1)
+    end
+  end
+
+  # A solution that passes a 1-bit check but not a 12-bit one
+  defp solve_weak(nonce), do: solve_weak(nonce, 0)
+
+  defp solve_weak(nonce, counter) do
+    solution = <<counter::64>>
+    hash = :crypto.hash(:sha256, nonce <> solution)
+
+    if Challenge.has_leading_zero_bits?(hash, 1) and
+         not Challenge.has_leading_zero_bits?(hash, 12) do
+      solution
+    else
+      solve_weak(nonce, counter + 1)
     end
   end
 end

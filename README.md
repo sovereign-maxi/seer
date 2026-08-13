@@ -2,7 +2,9 @@
 
 Anti-sybil and request gating for Tor hidden services.
 
-PoW challenges, per-circuit rate limiting, adaptive difficulty scaling, Tor circuit extraction, and escalating penalties. The product defines its operation types and limits; Seer enforces them.
+PoW challenges, per-circuit rate limiting, adaptive difficulty scaling, Tor circuit extraction, and escalating penalties. The consumer defines its operation types and limits; Seer enforces them.
+
+Source: [github.com/sovereign-maxi/seer](https://github.com/sovereign-maxi/seer)
 
 ## Installation
 
@@ -186,4 +188,4 @@ end
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

@@ -22,8 +22,10 @@ defmodule Seer.NonceStoreTest do
       nonce = :crypto.strong_rand_bytes(16)
       expires = System.monotonic_time(:second) + 120
 
-      assert :ok = NonceStore.track_nonce(nonce, {:issued, expires})
-      assert [{^nonce, {:issued, ^expires}}] = :ets.lookup(NonceStore.table_name(), nonce)
+      assert :ok = NonceStore.track_nonce(nonce, {:issued, expires, 12})
+
+      assert [{^nonce, {:issued, ^expires, 12}}] =
+               :ets.lookup(NonceStore.table_name(), nonce)
     end
 
     test "overwrites existing nonce" do
@@ -31,10 +33,11 @@ defmodule Seer.NonceStoreTest do
       expires1 = System.monotonic_time(:second) + 60
       expires2 = System.monotonic_time(:second) + 120
 
-      NonceStore.track_nonce(nonce, {:issued, expires1})
-      NonceStore.track_nonce(nonce, {:issued, expires2})
+      NonceStore.track_nonce(nonce, {:issued, expires1, 12})
+      NonceStore.track_nonce(nonce, {:issued, expires2, 16})
 
-      assert [{^nonce, {:issued, ^expires2}}] = :ets.lookup(NonceStore.table_name(), nonce)
+      assert [{^nonce, {:issued, ^expires2, 16}}] =
+               :ets.lookup(NonceStore.table_name(), nonce)
     end
 
     test "can store multiple different nonces" do
@@ -42,7 +45,7 @@ defmodule Seer.NonceStoreTest do
         for _i <- 1..10 do
           nonce = :crypto.strong_rand_bytes(16)
           expires = System.monotonic_time(:second) + 120
-          NonceStore.track_nonce(nonce, {:issued, expires})
+          NonceStore.track_nonce(nonce, {:issued, expires, 12})
           nonce
         end
 
@@ -52,22 +55,22 @@ defmodule Seer.NonceStoreTest do
     end
   end
 
-  # --- consume_nonce/1 ---
+  # --- consume_nonce/2 ---
 
-  describe "consume_nonce/1" do
-    test "consumes a valid issued nonce" do
+  describe "consume_nonce/2" do
+    test "consumes a valid issued nonce and returns the issued difficulty" do
       nonce = :crypto.strong_rand_bytes(16)
       expires = System.monotonic_time(:second) + 120
-      NonceStore.track_nonce(nonce, {:issued, expires})
+      NonceStore.track_nonce(nonce, {:issued, expires, 12})
 
-      assert :ok = NonceStore.consume_nonce(nonce)
+      assert {:ok, 12} = NonceStore.consume_nonce(nonce)
       assert [{^nonce, {:used, _ts}}] = :ets.lookup(NonceStore.table_name(), nonce)
     end
 
     test "returns error for expired nonce" do
       nonce = :crypto.strong_rand_bytes(16)
       past = System.monotonic_time(:second) - 10
-      NonceStore.track_nonce(nonce, {:issued, past})
+      NonceStore.track_nonce(nonce, {:issued, past, 12})
 
       assert {:error, :nonce_expired} = NonceStore.consume_nonce(nonce)
       assert [] = :ets.lookup(NonceStore.table_name(), nonce)
@@ -76,9 +79,9 @@ defmodule Seer.NonceStoreTest do
     test "returns error for already used nonce" do
       nonce = :crypto.strong_rand_bytes(16)
       expires = System.monotonic_time(:second) + 120
-      NonceStore.track_nonce(nonce, {:issued, expires})
+      NonceStore.track_nonce(nonce, {:issued, expires, 12})
 
-      assert :ok = NonceStore.consume_nonce(nonce)
+      assert {:ok, 12} = NonceStore.consume_nonce(nonce)
       assert {:error, :nonce_already_used} = NonceStore.consume_nonce(nonce)
     end
 
@@ -87,13 +90,23 @@ defmodule Seer.NonceStoreTest do
       assert {:error, :nonce_not_found} = NonceStore.consume_nonce(nonce)
     end
 
+    test "returns :nonce_not_found for malformed entries and removes them" do
+      nonce = :crypto.strong_rand_bytes(16)
+      expires = System.monotonic_time(:second) + 120
+      # Legacy two-element shape (no difficulty)
+      NonceStore.track_nonce(nonce, {:issued, expires})
+
+      assert {:error, :nonce_not_found} = NonceStore.consume_nonce(nonce)
+      assert [] = :ets.lookup(NonceStore.table_name(), nonce)
+    end
+
     test "consuming marks the nonce as used with timestamp" do
       nonce = :crypto.strong_rand_bytes(16)
       expires = System.monotonic_time(:second) + 120
-      NonceStore.track_nonce(nonce, {:issued, expires})
+      NonceStore.track_nonce(nonce, {:issued, expires, 12})
 
       before_consume = System.monotonic_time(:second)
-      :ok = NonceStore.consume_nonce(nonce)
+      {:ok, 12} = NonceStore.consume_nonce(nonce)
 
       [{^nonce, {:used, used_at}}] = :ets.lookup(NonceStore.table_name(), nonce)
       assert used_at >= before_consume
@@ -102,9 +115,23 @@ defmodule Seer.NonceStoreTest do
     test "boundary: nonce exactly at expiry time is still valid" do
       nonce = :crypto.strong_rand_bytes(16)
       now = System.monotonic_time(:second)
-      NonceStore.track_nonce(nonce, {:issued, now})
+      NonceStore.track_nonce(nonce, {:issued, now, 12})
 
-      assert :ok = NonceStore.consume_nonce(nonce)
+      assert {:ok, 12} = NonceStore.consume_nonce(nonce)
+    end
+
+    test "targets a custom-named server when it is the sole instance" do
+      # Stop the default instance from setup to free the named table
+      safe_stop(Process.whereis(NonceStore))
+
+      {:ok, custom} = NonceStore.start_link(name: :custom_nonce_store)
+      on_exit(fn -> safe_stop(custom) end)
+
+      nonce = :crypto.strong_rand_bytes(16)
+      expires = System.monotonic_time(:second) + 120
+      NonceStore.track_nonce(nonce, {:issued, expires, 12})
+
+      assert {:ok, 12} = NonceStore.consume_nonce(:custom_nonce_store, nonce)
     end
   end
 
@@ -118,8 +145,8 @@ defmodule Seer.NonceStoreTest do
       past = System.monotonic_time(:second) - 10
       future = System.monotonic_time(:second) + 120
 
-      NonceStore.track_nonce(nonce_expired, {:issued, past})
-      NonceStore.track_nonce(nonce_valid, {:issued, future})
+      NonceStore.track_nonce(nonce_expired, {:issued, past, 12})
+      NonceStore.track_nonce(nonce_valid, {:issued, future, 12})
 
       NonceStore.cleanup()
 
@@ -160,7 +187,7 @@ defmodule Seer.NonceStoreTest do
       for _i <- 1..5 do
         nonce = :crypto.strong_rand_bytes(16)
         expires = System.monotonic_time(:second) + 120
-        NonceStore.track_nonce(nonce, {:issued, expires})
+        NonceStore.track_nonce(nonce, {:issued, expires, 12})
       end
 
       assert :ets.info(NonceStore.table_name(), :size) == 5

@@ -19,11 +19,11 @@ defmodule Seer.RateLimiter do
   ## Global-bucket sizing
 
   The global bucket exists to bound the total signing/write cost
-  the venue absorbs even under a spray of small attackers. Its
+  the service absorbs even under a spray of small attackers. Its
   size is `max_requests * global_multiplier` — a single attacker
   hitting the per-circuit cap contributes only `1/multiplier` to
   the global. Too low a multiplier lets a single attacker willing
-  to burn their quota 429 the whole venue's login/read surface.
+  to burn their quota 429 the whole service's login/read surface.
   Default multiplier is 100 so a single attacker has to genuinely
   flood before other users are affected.
   """
@@ -52,13 +52,16 @@ defmodule Seer.RateLimiter do
   @doc """
   Checks if a request is within rate limits.
 
-  Returns `:ok`, `{:error, :rate_limited}`, or `{:error, {:unknown_operation, op}}`
-  if the operation is not in the configured limits.
+  Returns `:ok`, `{:error, :rate_limited}`, `{:error, :unavailable}`
+  (limiter mid-restart, ETS table gone — callers should fail closed),
+  or `{:error, {:unknown_operation, op}}` if the operation is not in
+  the configured limits.
   """
-  @spec check(binary(), atom()) :: :ok | {:error, :rate_limited | {:unknown_operation, atom()}}
+  @spec check(binary(), atom()) ::
+          :ok | {:error, :rate_limited | :unavailable | {:unknown_operation, atom()}}
   def check(circuit_id, operation) do
     limits = :persistent_term.get(Seer.RateLimiter.Config, @default_limits)
-    global_mult = :persistent_term.get(Seer.RateLimiter.GlobalMult, 10)
+    global_mult = :persistent_term.get(Seer.RateLimiter.GlobalMult, 100)
 
     case Map.get(limits, operation) do
       nil ->
@@ -69,8 +72,11 @@ defmodule Seer.RateLimiter do
         multiplier = get_multiplier(circuit_id)
         effective_max = max(1, div(max_requests, multiplier))
 
-        with :ok <- check_global(operation, max_requests * global_mult, window_seconds, now) do
-          check_circuit(circuit_id, operation, effective_max, window_seconds, now)
+        # Circuit first: requests rejected at the circuit level must NOT
+        # consume global-bucket quota — otherwise one flooding circuit
+        # could exhaust the global limit and 429 the whole service.
+        with :ok <- check_circuit(circuit_id, operation, effective_max, window_seconds, now) do
+          check_global(operation, max_requests * global_mult, window_seconds, now)
         end
     end
   end
@@ -124,6 +130,15 @@ defmodule Seer.RateLimiter do
     :persistent_term.put(Seer.RateLimiter.Config, limits_config)
     :persistent_term.put(Seer.RateLimiter.GlobalMult, global_mult)
 
+    # Buckets must live for two full windows; the cleanup cutoff derives
+    # from the longest configured window rather than a fixed constant.
+    max_window =
+      limits_config
+      |> Enum.map(fn {_op, {_max_requests, window_seconds}} -> window_seconds end)
+      |> Enum.max(fn -> 300 end)
+
+    :persistent_term.put(Seer.RateLimiter.MaxWindowSeconds, max_window)
+
     schedule_cleanup()
     {:ok, %{}}
   end
@@ -148,7 +163,6 @@ defmodule Seer.RateLimiter do
 
     if count < max_requests do
       increment_bucket(key, bucket)
-      :ok
     else
       {:error, :rate_limited}
     end
@@ -161,7 +175,6 @@ defmodule Seer.RateLimiter do
 
     if count < max_requests do
       increment_bucket(key, bucket)
-      :ok
     else
       {:error, :rate_limited}
     end
@@ -189,6 +202,10 @@ defmodule Seer.RateLimiter do
     ArgumentError -> 0
   end
 
+  # The table is owned by this GenServer and vanishes during a
+  # crash-restart window. Return a distinct :unavailable so callers
+  # can fail closed (503) instead of dying on an uncaught
+  # ArgumentError from the insert below.
   defp increment_bucket(key, bucket) do
     ets_key = {key, bucket}
     now = System.monotonic_time(:second)
@@ -199,6 +216,7 @@ defmodule Seer.RateLimiter do
       :ets.update_counter(@table, ets_key, {2, 1})
       # Update timestamp in position 3
       :ets.update_element(@table, ets_key, {3, now})
+      :ok
     rescue
       ArgumentError ->
         # Key doesn't exist yet; insert with count=1.
@@ -206,13 +224,19 @@ defmodule Seer.RateLimiter do
         # update_counter and this insert. That's acceptable: the
         # second insert overwrites with count=1, which at worst loses
         # one count (the rate limiter errs conservative).
-        :ets.insert(@table, {ets_key, 1, now})
+        try do
+          :ets.insert(@table, {ets_key, 1, now})
+          :ok
+        rescue
+          ArgumentError -> {:error, :unavailable}
+        end
     end
   end
 
   defp cleanup_expired do
     now = System.monotonic_time(:second)
-    cutoff = now - 600
+    max_window = :persistent_term.get(Seer.RateLimiter.MaxWindowSeconds, 300)
+    cutoff = now - 2 * max_window
 
     cleanup_fn = fn
       {key, _count, ts}, _acc when is_integer(ts) and ts < cutoff ->

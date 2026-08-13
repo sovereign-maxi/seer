@@ -33,7 +33,7 @@ defmodule Seer.Challenge do
     now = System.monotonic_time(:second)
     expires_at = now + @ttl_seconds
 
-    case NonceStore.track_nonce(nonce, {:issued, expires_at}) do
+    case NonceStore.track_nonce(nonce, {:issued, expires_at, difficulty}) do
       :ok ->
         {:ok,
          %__MODULE__{
@@ -49,19 +49,20 @@ defmodule Seer.Challenge do
   end
 
   @doc """
-  Verifies a PoW solution against a nonce and difficulty.
+  Verifies a PoW solution against a nonce.
 
-  Atomically consumes the nonce to prevent replay. The nonce is
-  consumed *before* checking the solution; an invalid solution burns
-  the nonce. This is deliberate: it prevents brute-force grinding
-  against a single challenge. Clients must request a fresh challenge
-  on failure.
+  The difficulty is the one the challenge was ISSUED with, read from the
+  nonce record at consumption — callers cannot weaken verification by
+  passing a lower difficulty. The nonce is atomically consumed *before*
+  checking the solution; an invalid solution burns the nonce. This is
+  deliberate: it prevents brute-force grinding against a single
+  challenge. Clients must request a fresh challenge on failure.
   """
-  @spec verify(binary(), binary(), non_neg_integer()) ::
+  @spec verify(binary(), binary()) ::
           :ok
           | {:error, :invalid_solution | :nonce_expired | :nonce_already_used | :nonce_not_found}
-  def verify(nonce, solution, difficulty) do
-    with :ok <- NonceStore.consume_nonce(nonce) do
+  def verify(nonce, solution) do
+    with {:ok, difficulty} <- NonceStore.consume_nonce(nonce) do
       hash = :crypto.hash(:sha256, nonce <> solution)
 
       if has_leading_zero_bits?(hash, difficulty) do

@@ -30,15 +30,17 @@ defmodule Seer.NonceStore do
   end
 
   @doc """
-  Atomically consumes a nonce. Returns `:ok` if the nonce was issued
-  and not expired, `{:error, reason}` otherwise.
+  Atomically consumes a nonce. Returns `{:ok, difficulty}` — the
+  difficulty the challenge was issued at — if the nonce was issued and
+  not expired, `{:error, reason}` otherwise.
 
   Uses GenServer serialization to prevent TOCTOU races between
   concurrent requests attempting to consume the same nonce.
   """
-  @spec consume_nonce(binary()) :: :ok | {:error, atom()}
-  def consume_nonce(nonce) do
-    GenServer.call(__MODULE__, {:consume, nonce})
+  @spec consume_nonce(GenServer.server(), binary()) ::
+          {:ok, non_neg_integer()} | {:error, atom()}
+  def consume_nonce(server \\ __MODULE__, nonce) do
+    GenServer.call(server, {:consume, nonce})
   end
 
   @doc "Purges expired nonces from the table."
@@ -47,7 +49,7 @@ defmodule Seer.NonceStore do
     now = System.monotonic_time(:second)
 
     cleanup_fn = fn
-      {nonce, {:issued, expires_at}}, _acc when now > expires_at ->
+      {nonce, {:issued, expires_at, _difficulty}}, _acc when now > expires_at ->
         :ets.delete(@table, nonce)
 
       {nonce, {:used, used_at}}, _acc when now - used_at > 300 ->
@@ -92,11 +94,11 @@ defmodule Seer.NonceStore do
 
     result =
       case :ets.lookup(@table, nonce) do
-        [{^nonce, {:issued, expires_at}}] when now <= expires_at ->
+        [{^nonce, {:issued, expires_at, difficulty}}] when now <= expires_at ->
           :ets.insert(@table, {nonce, {:used, now}})
-          :ok
+          {:ok, difficulty}
 
-        [{^nonce, {:issued, _expires_at}}] ->
+        [{^nonce, {:issued, _expires_at, _difficulty}}] ->
           :ets.delete(@table, nonce)
           {:error, :nonce_expired}
 
@@ -104,6 +106,10 @@ defmodule Seer.NonceStore do
           {:error, :nonce_already_used}
 
         [] ->
+          {:error, :nonce_not_found}
+
+        _malformed_entry ->
+          :ets.delete(@table, nonce)
           {:error, :nonce_not_found}
       end
 

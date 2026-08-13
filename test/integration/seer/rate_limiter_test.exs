@@ -31,6 +31,16 @@ defmodule Seer.RateLimiterTest do
       assert :ok = RateLimiter.check(cid, :read)
     end
 
+    test "returns :unavailable (not a crash) when the ETS table is gone", %{
+      pid: pid,
+      circuit_id: cid
+    } do
+      # The limiter owns its table; in a crash-restart window callers
+      # must get a distinct fail-closed error, not an ArgumentError.
+      GenServer.stop(pid)
+      assert {:error, :unavailable} = RateLimiter.check(cid, :read)
+    end
+
     test "allows multiple requests up to limit", %{circuit_id: cid} do
       for _i <- 1..5 do
         assert :ok = RateLimiter.check(cid, :read)
@@ -199,6 +209,61 @@ defmodule Seer.RateLimiterTest do
       # read limit=5, multiplier=100 -> effective = max(1, 5/100) = max(1, 0) = 1
       assert :ok = RateLimiter.check(cid, :read)
       assert {:error, :rate_limited} = RateLimiter.check(cid, :read)
+    end
+  end
+
+  # --- global bucket isolation ---
+
+  describe "global bucket isolation" do
+    test "circuit-rejected requests do not consume the global bucket", %{pid: pid} do
+      # Restart with a small global cap so the behavior is observable
+      safe_stop(pid)
+
+      {:ok, pid2} =
+        RateLimiter.start_link(
+          limits: %{read: {2, 60}},
+          global_multiplier: 2
+        )
+
+      on_exit(fn -> safe_stop(pid2) end)
+
+      attacker = :crypto.strong_rand_bytes(16)
+      legit = :crypto.strong_rand_bytes(16)
+
+      # Attacker floods: 2 admitted, the rest rejected at the circuit level
+      results = for _i <- 1..10, do: RateLimiter.check(attacker, :read)
+      assert Enum.count(results, &(&1 == :ok)) == 2
+
+      # Global cap is 2 x 2 = 4; only the 2 admitted requests consumed it.
+      # A legitimate circuit is unaffected.
+      assert :ok = RateLimiter.check(legit, :read)
+    end
+  end
+
+  # --- cleanup window ---
+
+  describe "cleanup window" do
+    test "cleanup keeps buckets within two configured windows", %{pid: pid} do
+      # Restart with a window longer than the old fixed 600s cutoff
+      safe_stop(pid)
+
+      {:ok, pid2} =
+        RateLimiter.start_link(
+          limits: %{slow: {10, 900}},
+          global_multiplier: 100
+        )
+
+      on_exit(fn -> safe_stop(pid2) end)
+
+      # A bucket 700s old: inside 2 x 900s, beyond the old fixed 600s cutoff
+      old = System.monotonic_time(:second) - 700
+      key = {{:circuit, :crypto.strong_rand_bytes(16), :slow}, 0}
+      :ets.insert(RateLimiter, {key, 3, old})
+
+      send(pid2, :cleanup)
+      :sys.get_state(pid2)
+
+      assert [{^key, 3, ^old}] = :ets.lookup(RateLimiter, key)
     end
   end
 

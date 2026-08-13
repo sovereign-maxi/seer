@@ -28,9 +28,9 @@ defmodule Seer.Escalation do
   end
 
   @doc "Records an abuse event and applies escalating penalty."
-  @spec record(binary()) :: :ok
-  def record(circuit_id) do
-    GenServer.call(__MODULE__, {:record, circuit_id})
+  @spec record(GenServer.server(), binary()) :: :ok
+  def record(server \\ __MODULE__, circuit_id) do
+    GenServer.call(server, {:record, circuit_id})
   end
 
   @doc "Returns the escalation status for a circuit."
