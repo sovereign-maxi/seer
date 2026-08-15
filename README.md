@@ -109,12 +109,15 @@ RateLimiter.apply_multiplier(circuit_id, 3, expires_at)
 ```elixir
 alias Seer.Circuit.Extractor
 
-# Extract hashed circuit ID from Plug.Conn
+# Extract hashed client ID from Plug.Conn
 {:ok, circuit_hash} = Extractor.extract(conn)
 
-# Default behaviour: derive from peer {ip, port}. Tor terminates every
-# external circuit on loopback, but the ephemeral source port differs
-# per circuit and serves as the surrogate.
+# Default behaviour: derive from the peer IP address only. The
+# ephemeral source port is per TCP connection, not per client, so
+# including it would let every reconnect rotate into a fresh
+# rate-limit bucket. Over a hidden service all circuits arrive on
+# loopback and share one bucket (per-circuit limits then act as a
+# venue-wide cap).
 #
 # To use a header-based circuit tag instead (e.g., from a trusted
 # sidecar that signs Tor control-port data), opt in:
@@ -146,7 +149,7 @@ Escalation.reset(circuit_id)
 * **EMA scaling**: difficulty adjusts based on exponential moving average of request throughput
 * **Anti-oscillation**: difficulty drops at most 2 bits per tick to prevent flapping
 * **Privacy-first**: escalation state is ETS-only, no disk persistence, no circuit IDs in logs
-* **Tor-aware**: circuit ID derived from peer port (the `X-Tor-Circuit` header is rejected by default since every Tor request arrives on loopback and the header would be attacker-controlled)
+* **Tor-aware**: client ID derived from the peer IP (the `X-Tor-Circuit` header is rejected by default since every Tor request arrives on loopback and the header would be attacker-controlled)
 
 ## Development
 

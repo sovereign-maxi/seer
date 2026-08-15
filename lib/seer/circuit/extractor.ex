@@ -1,12 +1,24 @@
 defmodule Seer.Circuit.Extractor do
   @moduledoc """
-  Extracts a hashed Tor circuit identifier from a connection.
+  Extracts a hashed client identifier from a connection.
 
-  Always derives the circuit ID from the peer `{ip, port}` tuple. Tor
-  routes every external circuit to the local HTTP listener via loopback,
-  so the raw `conn.remote_ip` is always `127.0.0.1` from the application's
-  point of view. The ephemeral source port allocated by Tor differs
-  per circuit, so it serves as a reasonable per-circuit surrogate.
+  Derives the ID from the peer IP address alone — the only stable
+  identity visible at this layer. Tor routes every external circuit to
+  the local HTTP listener via loopback, so the raw `conn.remote_ip` is
+  always `127.0.0.1` from the application's point of view.
+
+  The ephemeral source port is deliberately NOT part of the key: it is
+  allocated per TCP connection, not per client, so every reconnect (or
+  any client that doesn't reuse a keep-alive connection) would land in
+  a fresh rate-limit bucket and the per-circuit limiter would throttle
+  nothing.
+
+  The tradeoff of IP-only keying: over a hidden service every client
+  shares the single loopback bucket, so the per-circuit limits act as
+  a venue-wide cap (the global tier still bounds total load above it);
+  on clearnet, clients behind one NAT egress share a budget. That is
+  fail-closed where port keying was fail-open — per-client fairness is
+  not achievable at this layer without a trusted identity source.
 
   ## Why not trust `X-Tor-Circuit`?
 
@@ -57,19 +69,8 @@ defmodule Seer.Circuit.Extractor do
   end
 
   defp extract_from_peer(conn) do
-    %{address: address, port: port} = Plug.Conn.get_peer_data(conn)
-    addr_str = address |> :inet.ntoa() |> to_string()
-
-    # Use bracket notation for IPv6 to prevent ambiguity with port separator.
-    # IPv4: "127.0.0.1:8080", IPv6: "[::1]:8080"
-    raw_id =
-      if tuple_size(address) == 8 do
-        "[#{addr_str}]:#{port}"
-      else
-        "#{addr_str}:#{port}"
-      end
-
-    {:ok, hash(raw_id)}
+    %{address: address} = Plug.Conn.get_peer_data(conn)
+    {:ok, address |> :inet.ntoa() |> to_string() |> hash()}
   end
 
   defp localhost?(conn) do

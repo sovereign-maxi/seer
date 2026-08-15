@@ -61,7 +61,7 @@ defmodule Seer.Circuit.ExtractorTest do
       assert {:ok, hash} = Extractor.extract(conn)
       # Should fall back to peer data: the header is not trusted by default.
       refute hash == :crypto.hash(:sha256, "spoofed")
-      assert hash == :crypto.hash(:sha256, "127.0.0.1:54321")
+      assert hash == :crypto.hash(:sha256, "127.0.0.1")
     end
 
     test "ignores X-Tor-Circuit header from non-localhost" do
@@ -75,7 +75,7 @@ defmodule Seer.Circuit.ExtractorTest do
       assert {:ok, hash} = Extractor.extract(conn)
       # Should NOT use the header; should use peer address
       refute hash == :crypto.hash(:sha256, "spoofed")
-      assert hash == :crypto.hash(:sha256, "10.0.0.5:12345")
+      assert hash == :crypto.hash(:sha256, "10.0.0.5")
     end
 
     test "falls back to peer data when no header on localhost" do
@@ -87,7 +87,7 @@ defmodule Seer.Circuit.ExtractorTest do
         )
 
       assert {:ok, hash} = Extractor.extract(conn)
-      assert hash == :crypto.hash(:sha256, "127.0.0.1:54321")
+      assert hash == :crypto.hash(:sha256, "127.0.0.1")
     end
 
     test "uses peer data for remote IP connections" do
@@ -99,7 +99,40 @@ defmodule Seer.Circuit.ExtractorTest do
         )
 
       assert {:ok, hash} = Extractor.extract(conn)
-      assert hash == :crypto.hash(:sha256, "192.168.1.100:9999")
+      assert hash == :crypto.hash(:sha256, "192.168.1.100")
+    end
+
+    test "same peer IP with different source ports yields the same hash" do
+      # A reconnect must land in the same rate-limit bucket: the
+      # ephemeral port is per-connection and must not rotate the
+      # client identity.
+      conn1 = mock_conn({127, 0, 0, 1}, [], %{address: {127, 0, 0, 1}, port: 54_321})
+      conn2 = mock_conn({127, 0, 0, 1}, [], %{address: {127, 0, 0, 1}, port: 54_322})
+
+      assert {:ok, h1} = Extractor.extract(conn1)
+      assert {:ok, h2} = Extractor.extract(conn2)
+      assert h1 == h2
+    end
+
+    test "different peer IPs produce different hashes" do
+      conn1 = mock_conn({10, 0, 0, 1}, [], %{address: {10, 0, 0, 1}, port: 1111})
+      conn2 = mock_conn({10, 0, 0, 2}, [], %{address: {10, 0, 0, 2}, port: 1111})
+
+      assert {:ok, h1} = Extractor.extract(conn1)
+      assert {:ok, h2} = Extractor.extract(conn2)
+      refute h1 == h2
+    end
+
+    test "hashes IPv6 peer addresses" do
+      conn =
+        mock_conn(
+          {0, 0, 0, 0, 0, 0, 0, 1},
+          [],
+          %{address: {0, 0, 0, 0, 0, 0, 0, 1}, port: 8080}
+        )
+
+      assert {:ok, hash} = Extractor.extract(conn)
+      assert hash == :crypto.hash(:sha256, "::1")
     end
 
     @tag :trust_header
@@ -135,7 +168,7 @@ defmodule Seer.Circuit.ExtractorTest do
       assert {:ok, hash} = Extractor.extract(conn)
       # Should have fallen back to peer data, not used the oversized header
       refute hash == :crypto.hash(:sha256, long_value)
-      assert hash == :crypto.hash(:sha256, "127.0.0.1:11111")
+      assert hash == :crypto.hash(:sha256, "127.0.0.1")
     end
 
     @tag :trust_header
