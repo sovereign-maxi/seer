@@ -123,7 +123,10 @@ defmodule Seer.Circuit.ExtractorTest do
       refute h1 == h2
     end
 
-    test "hashes IPv6 peer addresses" do
+    test "IPv6 peer addresses aggregate to /64 before hashing" do
+      # ::1 → :: after /64 truncation. Otherwise a routed /48 lets an
+      # attacker rotate 65_536 fresh circuits and multiply their
+      # rate-limit budget.
       conn =
         mock_conn(
           {0, 0, 0, 0, 0, 0, 0, 1},
@@ -132,7 +135,47 @@ defmodule Seer.Circuit.ExtractorTest do
         )
 
       assert {:ok, hash} = Extractor.extract(conn)
-      assert hash == :crypto.hash(:sha256, "::1")
+      assert hash == :crypto.hash(:sha256, "::")
+    end
+
+    test "different IPv6 hosts in the same /64 hash the same" do
+      conn_a =
+        mock_conn(
+          {0x2001, 0xDB8, 0, 1, 0, 0, 0, 0xAAAA},
+          [],
+          %{address: {0x2001, 0xDB8, 0, 1, 0, 0, 0, 0xAAAA}, port: 1000}
+        )
+
+      conn_b =
+        mock_conn(
+          {0x2001, 0xDB8, 0, 1, 0xBEEF, 0, 0, 0xBBBB},
+          [],
+          %{address: {0x2001, 0xDB8, 0, 1, 0xBEEF, 0, 0, 0xBBBB}, port: 1001}
+        )
+
+      assert {:ok, h_a} = Extractor.extract(conn_a)
+      assert {:ok, h_b} = Extractor.extract(conn_b)
+      assert h_a == h_b
+    end
+
+    test "IPv6 hosts in distinct /64s hash differently" do
+      conn_a =
+        mock_conn(
+          {0x2001, 0xDB8, 0, 1, 0, 0, 0, 0xAAAA},
+          [],
+          %{address: {0x2001, 0xDB8, 0, 1, 0, 0, 0, 0xAAAA}, port: 1000}
+        )
+
+      conn_b =
+        mock_conn(
+          {0x2001, 0xDB8, 0, 2, 0, 0, 0, 0xAAAA},
+          [],
+          %{address: {0x2001, 0xDB8, 0, 2, 0, 0, 0, 0xAAAA}, port: 1000}
+        )
+
+      assert {:ok, h_a} = Extractor.extract(conn_a)
+      assert {:ok, h_b} = Extractor.extract(conn_b)
+      refute h_a == h_b
     end
 
     @tag :trust_header

@@ -70,8 +70,15 @@ defmodule Seer.Circuit.Extractor do
 
   defp extract_from_peer(conn) do
     %{address: address} = Plug.Conn.get_peer_data(conn)
-    {:ok, address |> :inet.ntoa() |> to_string() |> hash()}
+    {:ok, address |> aggregate_ip() |> :inet.ntoa() |> to_string() |> hash()}
   end
+
+  # IPv6 addresses truncate to /64 before hashing so an attacker with
+  # a routed /48 can't rotate through 65_536 fresh circuits and
+  # multiply their rate-limit budget. IPv4 stays at /32 — the
+  # aggregation move (/24) would over-collapse residential ISPs.
+  defp aggregate_ip({a, b, c, d, _e, _f, _g, _h}), do: {a, b, c, d, 0, 0, 0, 0}
+  defp aggregate_ip({_a, _b, _c, _d} = ipv4), do: ipv4
 
   defp localhost?(conn) do
     conn.remote_ip == {127, 0, 0, 1} or conn.remote_ip == {0, 0, 0, 0, 0, 0, 0, 1}
