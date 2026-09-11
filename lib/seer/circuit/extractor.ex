@@ -2,10 +2,12 @@ defmodule Seer.Circuit.Extractor do
   @moduledoc """
   Extracts a hashed client identifier from a connection.
 
-  Derives the ID from the peer IP address alone — the only stable
-  identity visible at this layer. Tor routes every external circuit to
-  the local HTTP listener via loopback, so the raw `conn.remote_ip` is
-  always `127.0.0.1` from the application's point of view.
+  Derives the ID from `conn.remote_ip`, which respects any upstream
+  RemoteIp-style plug that has restored the effective client IP from
+  a trusted forwarding header (e.g. CF-Connecting-IP behind Cloudflare).
+  Absent such a plug, `conn.remote_ip` equals the raw transport peer,
+  which under Tor's local HTTP listener is `127.0.0.1` from the
+  application's point of view.
 
   The ephemeral source port is deliberately NOT part of the key: it is
   allocated per TCP connection, not per client, so every reconnect (or
@@ -69,8 +71,7 @@ defmodule Seer.Circuit.Extractor do
   end
 
   defp extract_from_peer(conn) do
-    %{address: address} = Plug.Conn.get_peer_data(conn)
-    {:ok, address |> aggregate_ip() |> :inet.ntoa() |> to_string() |> hash()}
+    {:ok, conn.remote_ip |> aggregate_ip() |> :inet.ntoa() |> to_string() |> hash()}
   end
 
   # IPv6 addresses truncate to /64 before hashing so an attacker with
