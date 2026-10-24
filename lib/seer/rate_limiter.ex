@@ -30,8 +30,6 @@ defmodule Seer.RateLimiter do
 
   use GenServer
 
-  require Logger
-
   @table __MODULE__
   @cleanup_interval_ms 60_000
 
